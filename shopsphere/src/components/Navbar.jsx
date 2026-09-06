@@ -12,6 +12,8 @@ import {
   LogOut,
   CheckCheck,
   Trash2,
+  Menu,
+  X,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
@@ -34,6 +36,7 @@ function Navbar({
   const [searchCategory, setSearchCategory] = useState("All");
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navbarRef = useRef(null);
   const searchInputRef = useRef(null);
@@ -56,6 +59,7 @@ function Navbar({
       setIsSearchOpen(false);
       setIsNotificationOpen(false);
       setIsUserMenuOpen(false);
+      setIsMobileMenuOpen(false);
       setSearchTerm("");
     }
 
@@ -65,6 +69,7 @@ function Navbar({
       setIsSearchOpen(false);
       setIsNotificationOpen(false);
       setIsUserMenuOpen(false);
+      setIsMobileMenuOpen(false);
       setSearchTerm("");
     }
 
@@ -82,6 +87,7 @@ function Navbar({
 
     setIsNotificationOpen(false);
     setIsUserMenuOpen(false);
+    setIsMobileMenuOpen(false);
     setIsSearchOpen(nextState);
 
     if (nextState) {
@@ -126,12 +132,14 @@ function Navbar({
   function handleNotificationClick() {
     setIsSearchOpen(false);
     setIsUserMenuOpen(false);
+    setIsMobileMenuOpen(false);
     setIsNotificationOpen((value) => !value);
   }
 
   function handleUserClick() {
     setIsSearchOpen(false);
     setIsNotificationOpen(false);
+    setIsMobileMenuOpen(false);
     setIsUserMenuOpen((value) => !value);
   }
 
@@ -139,12 +147,14 @@ function Navbar({
     setIsSearchOpen(false);
     setIsNotificationOpen(false);
     setIsUserMenuOpen(false);
+    setIsMobileMenuOpen(false);
   }
 
   function handleCartClick() {
     setIsSearchOpen(false);
     setIsNotificationOpen(false);
     setIsUserMenuOpen(false);
+    setIsMobileMenuOpen(false);
     setIsCartOpen(true);
   }
 
@@ -179,11 +189,25 @@ function Navbar({
     return (
       <nav ref={navbarRef} className="navbar">
         <div className="navbar-container">
+          <button
+            type="button"
+            className="mobile-menu-toggle"
+            onClick={() => setIsMobileMenuOpen((value) => !value)}
+            aria-label={isMobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+            aria-expanded={isMobileMenuOpen}
+          >
+            {isMobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
+          </button>
+
           <div className="logo">ShopSphere</div>
 
-          <div className="nav-links">
-            <Link to="/">Home</Link>
-            {!isAuthPage && <Link to="/products">Products</Link>}
+          <div className={`nav-links ${isMobileMenuOpen ? "mobile-menu-open" : ""}`}>
+            <Link to="/" onClick={() => setIsMobileMenuOpen(false)}>Home</Link>
+            {!isAuthPage && (
+              <Link to="/products" onClick={() => setIsMobileMenuOpen(false)}>
+                Products
+              </Link>
+            )}
           </div>
 
           <div className="nav-icons">

@@ -1,10 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
+const crypto = require("crypto");
 const mysql = require("mysql2/promise");
 const dotenv = require("dotenv");
+const nodemailer = require("nodemailer");
+const path = require("path");
 
-dotenv.config({ path: "connect.env" });
+dotenv.config({ path: path.join(__dirname, "connect.env") });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -15,6 +18,15 @@ const db = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
+});
+const mailer = nodemailer.createTransport({
+  host: process.env.MAIL_HOST,
+  port: Number(process.env.MAIL_PORT || 587),
+  secure: String(process.env.MAIL_SECURE).toLowerCase() === "true",
+  auth: {
+    user: process.env.MAIL_USER,
+    pass: process.env.MAIL_PASSWORD,
+  },
 });
 
 function parseJsonValue(value, fallback) {
@@ -158,6 +170,17 @@ async function initializeDatabase() {
     )
   `);
 
+  for (const statement of [
+    "ALTER TABLE users ADD COLUMN email_verified TINYINT(1) NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN two_factor_enabled TINYINT(1) NOT NULL DEFAULT 0",
+  ]) {
+    try {
+      await db.execute(statement);
+    } catch (error) {
+      if (error.code !== "ER_DUP_FIELDNAME") throw error;
+    }
+  }
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS orders (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -177,6 +200,30 @@ async function initializeDatabase() {
       data JSON NOT NULL,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, data_type),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id BIGINT NOT NULL,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      expires_at DATETIME NOT NULL,
+      used_at DATETIME NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS email_verification_tokens (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id BIGINT NOT NULL,
+      code_hash CHAR(64) NOT NULL UNIQUE,
+      expires_at DATETIME NOT NULL,
+      used_at DATETIME NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
@@ -343,6 +390,212 @@ app.post("/api/auth/login", async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
     return res.status(500).json({ message: "Unable to log in" });
+  }
+});
+
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const normalizedEmail = String(req.body.email || "").trim().toLowerCase();
+
+  if (!normalizedEmail) {
+    return res.status(400).json({ message: "Email is required" });
+  }
+
+  const smtpIsConfigured =
+    process.env.MAIL_USER &&
+    process.env.MAIL_PASSWORD &&
+    !process.env.MAIL_USER.includes("your-email") &&
+    !process.env.MAIL_PASSWORD.includes("your-gmail-app-password");
+
+  if (!smtpIsConfigured) {
+    return res.status(503).json({
+      message: "Email service is not configured. Add a Gmail App Password in backend/connect.env.",
+    });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      "SELECT id FROM users WHERE email = ?",
+      [normalizedEmail]
+    );
+    const user = rows[0];
+
+    // Keep the response generic so the endpoint does not reveal registered emails.
+    if (!user) {
+      return res.json({ message: "If that email exists, a reset code was created." });
+    }
+
+    await db.execute(
+      "DELETE FROM password_reset_tokens WHERE user_id = ? OR expires_at < NOW()",
+      [user.id]
+    );
+
+    const resetCode = String(crypto.randomInt(100000, 1000000));
+    const tokenHash = crypto.createHash("sha256").update(resetCode).digest("hex");
+
+    await db.execute(
+      `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))`,
+      [user.id, tokenHash]
+    );
+
+    await mailer.sendMail({
+      from: process.env.MAIL_FROM || process.env.MAIL_USER,
+      to: normalizedEmail,
+      subject: "ShopSphere password reset code",
+      text: `Your ShopSphere authentication code is: ${resetCode}\n\nThis code expires in 15 minutes. If you did not request this, ignore this email.`,
+      html: `<p>Your ShopSphere authentication code is:</p><h2>${resetCode}</h2><p>This code expires in 15 minutes. If you did not request this, ignore this email.</p>`,
+    });
+
+    return res.json({
+      message: "Authentication code sent. Check your registered Gmail inbox. The code expires in 15 minutes.",
+    });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.status(500).json({ message: "Unable to create reset code" });
+  }
+});
+
+app.post("/api/auth/reset-password", async (req, res) => {
+  const { resetToken, newPassword } = req.body;
+
+  if (!resetToken || !newPassword) {
+    return res.status(400).json({ message: "Reset code and new password are required" });
+  }
+
+  if (String(newPassword).length < 6) {
+    return res.status(400).json({ message: "New password must be at least 6 characters" });
+  }
+
+  try {
+    const tokenHash = crypto.createHash("sha256").update(String(resetToken)).digest("hex");
+    const [rows] = await db.execute(
+      `SELECT id, user_id FROM password_reset_tokens
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()`,
+      [tokenHash]
+    );
+    const token = rows[0];
+
+    if (!token) {
+      return res.status(400).json({ message: "Reset code is invalid or expired" });
+    }
+
+    const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+    await db.execute("UPDATE users SET password = ? WHERE id = ?", [
+      hashedPassword,
+      token.user_id,
+    ]);
+    await db.execute(
+      "UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?",
+      [token.id]
+    );
+
+    return res.json({ message: "Password reset successfully" });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return res.status(500).json({ message: "Unable to reset password" });
+  }
+});
+
+app.get("/api/auth/security/:userId", async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      "SELECT email_verified, two_factor_enabled FROM users WHERE id = ?",
+      [req.params.userId]
+    );
+    const user = rows[0];
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    return res.json({
+      emailVerified: Boolean(user.email_verified),
+      twoFactorEnabled: Boolean(user.two_factor_enabled),
+    });
+  } catch (error) {
+    console.error("Security status error:", error);
+    return res.status(500).json({ message: "Unable to load security status" });
+  }
+});
+
+app.post("/api/auth/email-verification/request", async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) return res.status(400).json({ message: "User is required" });
+
+  try {
+    const [users] = await db.execute("SELECT id, email_verified FROM users WHERE id = ?", [userId]);
+    const user = users[0];
+
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.email_verified) return res.json({ message: "Email is already verified" });
+
+    await db.execute(
+      "DELETE FROM email_verification_tokens WHERE user_id = ? OR expires_at < NOW()",
+      [userId]
+    );
+
+    const code = String(crypto.randomInt(100000, 1000000));
+    const codeHash = crypto.createHash("sha256").update(code).digest("hex");
+
+    await db.execute(
+      `INSERT INTO email_verification_tokens (user_id, code_hash, expires_at)
+       VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))`,
+      [userId, codeHash]
+    );
+
+    return res.json({ message: "Verification code created. It expires in 15 minutes.", code });
+  } catch (error) {
+    console.error("Email verification request error:", error);
+    return res.status(500).json({ message: "Unable to create verification code" });
+  }
+});
+
+app.post("/api/auth/email-verification/verify", async (req, res) => {
+  const { userId, code } = req.body;
+
+  if (!userId || !code) return res.status(400).json({ message: "User and code are required" });
+
+  try {
+    const codeHash = crypto.createHash("sha256").update(String(code)).digest("hex");
+    const [rows] = await db.execute(
+      `SELECT id FROM email_verification_tokens
+       WHERE user_id = ? AND code_hash = ? AND used_at IS NULL AND expires_at > NOW()`,
+      [userId, codeHash]
+    );
+
+    if (!rows[0]) return res.status(400).json({ message: "Verification code is invalid or expired" });
+
+    await db.execute("UPDATE users SET email_verified = 1 WHERE id = ?", [userId]);
+    await db.execute("UPDATE email_verification_tokens SET used_at = NOW() WHERE id = ?", [rows[0].id]);
+
+    return res.json({ message: "Email verified successfully" });
+  } catch (error) {
+    console.error("Email verification error:", error);
+    return res.status(500).json({ message: "Unable to verify email" });
+  }
+});
+
+app.put("/api/auth/security/2fa", async (req, res) => {
+  const { userId, enabled } = req.body;
+
+  if (!userId || typeof enabled !== "boolean") {
+    return res.status(400).json({ message: "User and 2FA status are required" });
+  }
+
+  try {
+    const [result] = await db.execute(
+      "UPDATE users SET two_factor_enabled = ? WHERE id = ?",
+      [enabled ? 1 : 0, userId]
+    );
+
+    if (!result.affectedRows) return res.status(404).json({ message: "User not found" });
+
+    return res.json({
+      message: enabled ? "Two-factor authentication enabled" : "Two-factor authentication disabled",
+      enabled,
+    });
+  } catch (error) {
+    console.error("2FA update error:", error);
+    return res.status(500).json({ message: "Unable to update two-factor authentication" });
   }
 });
 

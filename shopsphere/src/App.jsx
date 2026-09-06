@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
-import { Routes, Route, useNavigate } from "react-router-dom";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
 
 
 import Login from "./Login";
 import Signup from "./Signup";
+import ForgotPassword from "./ForgotPassword";
 import ProtectedRoute from "./ProtectedRoute";
 
 import Navbar from "./components/Navbar";
@@ -20,6 +21,19 @@ import Settings from "./components/Settings";
 import { products as catalogProducts } from "./data/products";
 
 const API_BASE_URL = "http://localhost:5000/api";
+
+function InfoPage({ title, subtitle, children }) {
+  return (
+    <section className="info-page">
+      <div className="info-page-container">
+        <p className="section-subtitle">SHOPSPHERE INFORMATION</p>
+        <h1>{title}</h1>
+        <p className="info-page-subtitle">{subtitle}</p>
+        <div className="info-page-content">{children}</div>
+      </div>
+    </section>
+  );
+}
 
 function App() {
   /* =========================
@@ -697,6 +711,12 @@ function App() {
           element={<Signup />}
         />
 
+        {/* FORGOT PASSWORD */}
+        <Route
+          path="/forgot-password"
+          element={<ForgotPassword />}
+        />
+
         {/* ORDERS */}
         <Route
           path="/orders"
@@ -704,6 +724,56 @@ function App() {
             <ProtectedRoute currentUser={currentUser}>
               <OrderHistory orders={orders} />
             </ProtectedRoute>
+          }
+        />
+
+        {/* FOOTER INFORMATION PAGES */}
+        <Route
+          path="/about"
+          element={
+            <InfoPage title="About Me" subtitle="A better way to build your setup.">
+              <p>ShopSphere helps gamers, creators, and work-from-home users find reliable gear for a better everyday setup.</p>
+              <p>We focus on practical products, clear choices, and a smooth shopping experience.</p>
+            </InfoPage>
+          }
+        />
+        <Route
+          path="/faqs"
+          element={
+            <InfoPage title="FAQs" subtitle="Answers to common questions.">
+              <h2>How do I place an order?</h2>
+              <p>Add your items to the cart, continue to checkout, and complete the order form.</p>
+              <h2>Can I update my account?</h2>
+              <p>Yes. Sign in and open My Account to update your profile details.</p>
+            </InfoPage>
+          }
+        />
+        <Route
+          path="/contact"
+          element={
+            <InfoPage title="Contact Us" subtitle="We are here to help.">
+              <p>For questions about products, orders, or your account, contact us at:</p>
+              <p><strong>Email:</strong> support@shopsphere.com</p>
+              <p><strong>Hours:</strong> Monday–Friday, 9:00 AM–6:00 PM</p>
+            </InfoPage>
+          }
+        />
+        <Route
+          path="/terms"
+          element={
+            <InfoPage title="Terms of Service" subtitle="Please read these terms before using ShopSphere.">
+              <p>By using ShopSphere, you agree to provide accurate information and use the service lawfully.</p>
+              <p>Product availability, prices, and delivery details may change without prior notice.</p>
+            </InfoPage>
+          }
+        />
+        <Route
+          path="/privacy"
+          element={
+            <InfoPage title="Privacy Policy" subtitle="Your privacy matters to us.">
+              <p>We use your account and order information only to provide, improve, and secure the ShopSphere service.</p>
+              <p>We do not sell your personal information. Contact us if you have questions about your data.</p>
+            </InfoPage>
           }
         />
       </Routes>
@@ -744,20 +814,20 @@ function App() {
         <div className="store-footer-main">
           <div className="store-footer-brand">
             <div className="logo">ShopSphere</div>
+            <strong className="store-footer-about-title">About Me</strong>
             <p>Better gear for better play, work, and everyday focus.</p>
           </div>
           <div className="store-footer-links">
             <div>
-              <strong>Shop</strong>
-              <a href="/products">Gaming PCs</a>
-              <a href="/products">Monitors</a>
-              <a href="/products">Peripherals</a>
+              <strong>About</strong>
+              <Link to="/about">About Me</Link>
+              <Link to="/faqs">FAQs</Link>
+              <Link to="/contact">Contact Us</Link>
             </div>
             <div>
-              <strong>Support</strong>
-              <a href="/account">My account</a>
-              <a href="/orders">Order history</a>
-              <a href="/settings">Settings</a>
+              <strong>Legal</strong>
+              <Link to="/terms">Terms of Service</Link>
+              <Link to="/privacy">Privacy Policy</Link>
             </div>
           </div>
         </div>

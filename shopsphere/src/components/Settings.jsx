@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   KeyRound,
   Bell,
@@ -28,6 +28,21 @@ function Settings({ currentUser }) {
   });
 
   const [message, setMessage] = useState("");
+  const [security, setSecurity] = useState({
+    emailVerified: false,
+    twoFactorEnabled: false,
+  });
+  const [verificationCode, setVerificationCode] = useState("");
+  const [enteredCode, setEnteredCode] = useState("");
+
+  useEffect(() => {
+    if (!currentUser || activeSection !== "security") return;
+
+    fetch(`http://localhost:5000/api/auth/security/${currentUser.id}`)
+      .then((response) => response.json())
+      .then((data) => setSecurity(data))
+      .catch(() => setMessage("Unable to load security status."));
+  }, [activeSection, currentUser]);
 
   function openSection(section) {
     setActiveSection(section);
@@ -105,6 +120,64 @@ async function handleChangePassword(e) {
     setMessage(error.message || "Unable to change password.");
   }
 }
+
+  async function requestEmailVerification() {
+    setMessage("");
+
+    try {
+      const response = await fetch("http://localhost:5000/api/auth/email-verification/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
+      setMessage(data.message);
+      setVerificationCode(data.code || "");
+    } catch (error) {
+      setMessage(error.message || "Unable to create verification code.");
+    }
+  }
+
+  async function verifyEmail(event) {
+    event.preventDefault();
+    setMessage("");
+
+    try {
+      const response = await fetch("http://localhost:5000/api/auth/email-verification/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id, code: enteredCode }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
+      setSecurity((previous) => ({ ...previous, emailVerified: true }));
+      setVerificationCode("");
+      setEnteredCode("");
+      setMessage(data.message);
+    } catch (error) {
+      setMessage(error.message || "Unable to verify email.");
+    }
+  }
+
+  async function toggleTwoFactor() {
+    const enabled = !security.twoFactorEnabled;
+    setMessage("");
+
+    try {
+      const response = await fetch("http://localhost:5000/api/auth/security/2fa", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: currentUser.id, enabled }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
+      setSecurity((previous) => ({ ...previous, twoFactorEnabled: enabled }));
+      setMessage(data.message);
+    } catch (error) {
+      setMessage(error.message || "Unable to update two-factor authentication.");
+    }
+  }
 
   /* CHANGE PASSWORD */
 
@@ -367,7 +440,7 @@ async function handleChangePassword(e) {
 
           <div className="settings-card">
 
-            <div className="security-item">
+            <div className="security-item security-item-action" role="button" tabIndex="0" onClick={() => openSection("password")} onKeyDown={(event) => event.key === "Enter" && openSection("password")}>
 
               <div className="security-item-icon">
                 <Lock size={22} />
@@ -376,10 +449,7 @@ async function handleChangePassword(e) {
               <div>
                 <h3>Password Protection</h3>
 
-                <p>
-                  Keep your password secure
-                  and do not share it.
-                </p>
+                <p>Keep your password secure and do not share it.</p>
               </div>
 
               <Check
@@ -389,7 +459,7 @@ async function handleChangePassword(e) {
 
             </div>
 
-            <div className="security-item">
+            <div className="security-item security-item-action" role="button" tabIndex="0" onClick={security.emailVerified ? undefined : requestEmailVerification}>
 
               <div className="security-item-icon">
                 <Mail size={22} />
@@ -398,16 +468,22 @@ async function handleChangePassword(e) {
               <div>
                 <h3>Email Verification</h3>
 
-                <p>
-                  Email verification will be
-                  available after Login and
-                  Signup are implemented.
-                </p>
+                <p>{security.emailVerified ? "Your email address is verified." : "Verify your email address for better account protection."}</p>
               </div>
+
+              {security.emailVerified ? <Check className="security-check" size={22} /> : <Mail size={20} className="security-action-icon" />}
 
             </div>
 
-            <div className="security-item">
+            {verificationCode && (
+              <form className="security-verification-form" onSubmit={verifyEmail}>
+                <p>Development verification code: <strong>{verificationCode}</strong></p>
+                <input value={enteredCode} onChange={(event) => setEnteredCode(event.target.value)} placeholder="Enter 6-digit code" inputMode="numeric" maxLength={6} required />
+                <button type="submit" className="settings-primary-button">Verify Email</button>
+              </form>
+            )}
+
+            <div className="security-item security-item-action" role="button" tabIndex="0" onClick={toggleTwoFactor} onKeyDown={(event) => event.key === "Enter" && toggleTwoFactor()}>
 
               <div className="security-item-icon">
                 <Smartphone size={22} />
@@ -416,13 +492,14 @@ async function handleChangePassword(e) {
               <div>
                 <h3>Two-Factor Authentication</h3>
 
-                <p>
-                  Additional account protection
-                  will be available later.
-                </p>
+                <p>{security.twoFactorEnabled ? "Two-factor authentication is enabled." : "Add an extra security setting to your account."}</p>
               </div>
 
+              {security.twoFactorEnabled ? <Check className="security-check" size={22} /> : <ChevronRight size={20} />}
+
             </div>
+
+            {message && <p className="settings-message security-message">{message}</p>}
 
           </div>
 

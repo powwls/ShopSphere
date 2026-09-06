@@ -1,12 +1,43 @@
 const express = require("express");
 const cors = require("cors");
+const bcrypt = require("bcrypt");
+const mysql = require("mysql2/promise");
+const dotenv = require("dotenv");
+
+dotenv.config({ path: "connect.env" });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const db = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  waitForConnections: true,
+  connectionLimit: 10,
+});
+
+function parseJsonValue(value, fallback) {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
 
 app.use(
   cors({
     origin: [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
       "http://localhost:4173",
       "http://127.0.0.1:4173",
       "http://localhost:4174",
@@ -116,17 +147,97 @@ const products = [
   },
 ];
 
-const users = [
-  {
-    id: 1,
-    name: "Admin User",
-    email: "admin@shopsphere.com",
-    password: "admin123",
-    createdAt: new Date().toISOString(),
-  },
-];
+async function initializeDatabase() {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS users (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(100) NOT NULL,
+      email VARCHAR(255) NOT NULL UNIQUE,
+      password VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-const orders = [];
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      user_id BIGINT NOT NULL,
+      products JSON NOT NULL,
+      total DECIMAL(10, 2) NOT NULL,
+      order_data JSON NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS user_data (
+      user_id BIGINT NOT NULL,
+      data_type VARCHAR(30) NOT NULL,
+      data JSON NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, data_type),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  try {
+    await db.execute(
+      "ALTER TABLE orders ADD COLUMN order_data JSON NOT NULL"
+    );
+  } catch (error) {
+    if (error.code !== "ER_DUP_FIELDNAME") {
+      throw error;
+    }
+  }
+
+  try {
+    await db.execute(
+      "ALTER TABLE orders ADD COLUMN order_number VARCHAR(50) NULL AFTER id"
+    );
+  } catch (error) {
+    if (error.code !== "ER_DUP_FIELDNAME") {
+      throw error;
+    }
+  }
+
+  await db.execute(`
+    UPDATE orders
+    SET order_number = COALESCE(
+      NULLIF(JSON_UNQUOTE(JSON_EXTRACT(order_data, '$.orderNumber')), ''),
+      CONCAT('SS-OLD-', id)
+    )
+    WHERE order_number IS NULL OR order_number = ''
+  `);
+
+  await db.execute(
+    "ALTER TABLE orders MODIFY order_number VARCHAR(50) NOT NULL"
+  );
+
+  try {
+    await db.execute(
+      "CREATE UNIQUE INDEX unique_order_number ON orders (order_number)"
+    );
+  } catch (error) {
+    if (error.code !== "ER_DUP_KEYNAME") {
+      throw error;
+    }
+  }
+
+  const [adminRows] = await db.execute(
+    "SELECT id FROM users WHERE email = ?",
+    ["admin@shopsphere.com"]
+  );
+
+  if (adminRows.length === 0) {
+    const hashedPassword = await bcrypt.hash("admin123", 10);
+
+    await db.execute(
+      "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+      ["Admin User", "admin@shopsphere.com", hashedPassword]
+    );
+  }
+}
 
 app.get("/api/health", (_, res) => {
   res.json({ status: "ok", message: "ShopSphere API is running" });
@@ -146,63 +257,96 @@ app.get("/api/products/:id", (req, res) => {
   return res.json(product);
 });
 
-app.post("/api/auth/signup", (req, res) => {
+app.get("/api/user-data/:userId/:dataType", async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      "SELECT data FROM user_data WHERE user_id = ? AND data_type = ?",
+      [req.params.userId, req.params.dataType]
+    );
+
+    return res.json(rows[0] ? parseJsonValue(rows[0].data, null) : null);
+  } catch (error) {
+    console.error("User data load error:", error);
+    return res.status(500).json({ message: "Unable to load user data" });
+  }
+});
+
+app.put("/api/user-data/:userId/:dataType", async (req, res) => {
+  try {
+    await db.execute(
+      `INSERT INTO user_data (user_id, data_type, data)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE data = VALUES(data)`,
+      [req.params.userId, req.params.dataType, JSON.stringify(req.body)]
+    );
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("User data save error:", error);
+    return res.status(500).json({ message: "Unable to save user data" });
+  }
+});
+
+app.post("/api/auth/signup", async (req, res) => {
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ message: "All fields are required" });
   }
 
-  const emailExists = users.some(
-    (user) => user.email.toLowerCase() === String(email).trim().toLowerCase()
-  );
+  try {
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const hashedPassword = await bcrypt.hash(String(password), 10);
+    const [result] = await db.execute(
+      "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+      [String(name).trim(), normalizedEmail, hashedPassword]
+    );
 
-  if (emailExists) {
-    return res.status(409).json({ message: "Email is already registered" });
+    return res.status(201).json({
+      id: result.insertId,
+      name: String(name).trim(),
+      email: normalizedEmail,
+    });
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ message: "Email is already registered" });
+    }
+
+    console.error("Signup error:", error);
+    return res.status(500).json({ message: "Unable to create account" });
   }
-
-  const newUser = {
-    id: Date.now(),
-    name: String(name).trim(),
-    email: String(email).trim().toLowerCase(),
-    password: String(password),
-    createdAt: new Date().toISOString(),
-  };
-
-  users.push(newUser);
-
-  return res.status(201).json({
-    id: newUser.id,
-    name: newUser.name,
-    email: newUser.email,
-  });
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ message: "Email and password are required" });
   }
 
-  const user = users.find(
-    (savedUser) =>
-      savedUser.email.toLowerCase() === String(email).trim().toLowerCase() &&
-      savedUser.password === String(password)
-  );
+  try {
+    const [rows] = await db.execute(
+      "SELECT id, name, email, password FROM users WHERE email = ?",
+      [String(email).trim().toLowerCase()]
+    );
+    const user = rows[0];
 
-  if (!user) {
-    return res.status(401).json({ message: "Invalid email or password" });
+    if (!user || !(await bcrypt.compare(String(password), user.password))) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    return res.json({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    return res.status(500).json({ message: "Unable to log in" });
   }
-
-  return res.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-  });
 });
 
-app.post("/api/orders", (req, res) => {
+app.post("/api/orders", async (req, res) => {
   const { order } = req.body;
 
   if (!order || !order.userId || !order.products?.length) {
@@ -211,25 +355,115 @@ app.post("/api/orders", (req, res) => {
     });
   }
 
-  const savedOrder = {
-    ...order,
-    id: Date.now(),
-    createdAt: new Date().toISOString(),
-  };
+  try {
+    const [result] = await db.execute(
+      `INSERT INTO orders
+        (order_number, user_id, products, total, order_data)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        order.orderNumber,
+        order.userId,
+        JSON.stringify(order.products),
+        order.total,
+        JSON.stringify(order),
+      ]
+    );
 
-  orders.unshift(savedOrder);
+    const savedOrder = {
+      ...order,
+      id: result.insertId,
+      createdAt: new Date().toISOString(),
+    };
 
-  return res.status(201).json({ success: true, order: savedOrder });
+    return res.status(201).json({ success: true, order: savedOrder });
+  } catch (error) {
+    console.error("Order save error:", error);
+    return res.status(500).json({ message: "Unable to save order" });
+  }
 });
 
-app.get("/api/orders/:userId", (req, res) => {
-  const userOrders = orders.filter(
-    (order) => String(order.userId) === String(req.params.userId)
-  );
+app.get("/api/orders/:userId", async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT id, order_number, order_data, created_at
+       FROM orders
+       WHERE user_id = ?
+       ORDER BY created_at DESC`,
+      [req.params.userId]
+    );
 
-  return res.json(userOrders);
+    const userOrders = rows.map((row) => ({
+      ...parseJsonValue(row.order_data, {}),
+      id: row.id,
+      orderNumber: row.order_number,
+      createdAt: row.created_at,
+    }));
+
+    return res.json(userOrders);
+  } catch (error) {
+    console.error("Order history error:", error);
+    return res.status(500).json({ message: "Unable to load orders" });
+  }
 });
 
-app.listen(PORT, () => {
-  console.log(`ShopSphere API running on http://localhost:${PORT}`);
+app.put("/api/auth/password", async (req, res) => {
+  const { userId, currentPassword, newPassword } = req.body;
+
+  if (!userId || !currentPassword || !newPassword) {
+    return res.status(400).json({
+      message: "All password fields are required",
+    });
+  }
+
+  if (String(newPassword).length < 6) {
+    return res.status(400).json({
+      message: "New password must be at least 6 characters",
+    });
+  }
+
+  try {
+    const [rows] = await db.execute(
+      "SELECT id, password FROM users WHERE id = ?",
+      [userId]
+    );
+    const user = rows[0];
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const passwordMatches = await bcrypt.compare(
+      String(currentPassword),
+      user.password
+    );
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        message: "Current password is incorrect",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(String(newPassword), 10);
+
+    await db.execute(
+      "UPDATE users SET password = ? WHERE id = ?",
+      [hashedPassword, userId]
+    );
+
+    return res.json({ message: "Password changed successfully" });
+  } catch (error) {
+    console.error("Password change error:", error);
+    return res.status(500).json({ message: "Unable to change password" });
+  }
 });
+
+initializeDatabase()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`ShopSphere API running on http://localhost:${PORT}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Database initialization failed:", error.message);
+    process.exit(1);
+  });

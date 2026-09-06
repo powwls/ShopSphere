@@ -15,8 +15,6 @@ import {
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-const NOTIFICATIONS_KEY = "shopsphereNotifications";
-
 function Navbar({
   cartCount,
   setIsCartOpen,
@@ -156,7 +154,6 @@ function Navbar({
 
   function updateNotifications(nextNotifications) {
     setNotifications(nextNotifications);
-    localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(nextNotifications));
   }
 
   function markAllAsRead() {

@@ -9,24 +9,39 @@ import {
   X,
 } from "lucide-react";
 
-function Account() {
+function Account({ currentUser }) {
   const [isEditing, setIsEditing] = useState(false);
 
   const [profile, setProfile] = useState({
-    name: "",
-    email: "",
+    name: currentUser?.name || "",
+    email: currentUser?.email || "",
     phone: "",
     address: "",
   });
 
   useEffect(() => {
-    const savedProfile =
-      localStorage.getItem("shopsphere-profile");
+    if (!currentUser) return;
 
-    if (savedProfile) {
-      setProfile(JSON.parse(savedProfile));
+    async function loadProfile() {
+      try {
+        const response = await fetch(
+          `http://localhost:5000/api/user-data/${currentUser.id}/profile`
+        );
+        const savedProfile = await response.json();
+
+        if (savedProfile) {
+          setProfile((previousProfile) => ({
+            ...previousProfile,
+            ...savedProfile,
+          }));
+        }
+      } catch (error) {
+        console.error("Unable to load profile:", error);
+      }
     }
-  }, []);
+
+    loadProfile();
+  }, [currentUser]);
 
   function handleChange(e) {
     const { name, value } = e.target;
@@ -40,28 +55,25 @@ function Account() {
   function handleSave(e) {
     e.preventDefault();
 
-    localStorage.setItem(
-      "shopsphere-profile",
-      JSON.stringify(profile)
-    );
+    fetch(
+      `http://localhost:5000/api/user-data/${currentUser.id}/profile`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profile),
+      }
+    ).catch((error) => console.error("Unable to save profile:", error));
 
     setIsEditing(false);
   }
 
   function handleCancel() {
-    const savedProfile =
-      localStorage.getItem("shopsphere-profile");
-
-    if (savedProfile) {
-      setProfile(JSON.parse(savedProfile));
-    } else {
-      setProfile({
-        name: "",
-        email: "",
-        phone: "",
-        address: "",
-      });
-    }
+    setProfile({
+      name: currentUser?.name || "",
+      email: currentUser?.email || "",
+      phone: "",
+      address: "",
+    });
 
     setIsEditing(false);
   }

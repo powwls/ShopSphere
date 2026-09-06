@@ -19,6 +19,8 @@ import Account from "./components/Account";
 import Settings from "./components/Settings";
 import { products as catalogProducts } from "./data/products";
 
+const API_BASE_URL = "http://localhost:5000/api";
+
 function App() {
   /* =========================
      CURRENT USER
@@ -121,46 +123,45 @@ function App() {
       return;
     }
 
-    const savedCart = localStorage.getItem(
-      `shopsphere-cart-${currentUser.id}`
-    );
+    async function loadUserData() {
+      try {
+        const [cartResponse, wishlistResponse, notificationsResponse] =
+          await Promise.all([
+            fetch(`${API_BASE_URL}/user-data/${currentUser.id}/cart`),
+            fetch(`${API_BASE_URL}/user-data/${currentUser.id}/wishlist`),
+            fetch(`${API_BASE_URL}/user-data/${currentUser.id}/notifications`),
+          ]);
 
-    const savedWishlist = localStorage.getItem(
-      `shopsphere-wishlist-${currentUser.id}`
-    );
+        const [userCart, userWishlist, savedNotifications] = await Promise.all([
+          cartResponse.json(),
+          wishlistResponse.json(),
+          notificationsResponse.json(),
+        ]);
 
-    const savedOrders = localStorage.getItem(
-      `shopsphere-orders-${currentUser.id}`
-    );
+        setCart(userCart || []);
+        setWishlist(userWishlist || []);
+        setNotifications(
+          savedNotifications || [
+            {
+              id: Date.now(),
+              title: "Welcome to ShopSphere!",
+              message: "Start exploring gaming gear for your setup.",
+              time: "Just now",
+              read: false,
+            },
+          ]
+        );
+      } catch (error) {
+        console.error("Unable to load user data:", error);
+        setCart([]);
+        setWishlist([]);
+        setNotifications([]);
+      } finally {
+        setIsUserDataLoaded(true);
+      }
+    }
 
-    const savedNotifications = localStorage.getItem(
-      `shopsphere-notifications-${currentUser.id}`
-    );
-
-    const userCart = savedCart ? JSON.parse(savedCart) : [];
-    const userWishlist = savedWishlist
-      ? JSON.parse(savedWishlist)
-      : [];
-    const userOrders = savedOrders ? JSON.parse(savedOrders) : [];
-    const userNotifications = savedNotifications
-      ? JSON.parse(savedNotifications)
-      : [
-          {
-            id: Date.now(),
-            title: "Welcome to ShopSphere!",
-            message: "Start exploring gaming gear for your setup.",
-            time: "Just now",
-            read: false,
-          },
-        ];
-
-    setCart(userCart);
-    setWishlist(userWishlist);
-    setOrders(userOrders);
-    setNotifications(userNotifications);
-
-    // Allow saving only after all user data has loaded.
-    setIsUserDataLoaded(true);
+    loadUserData();
   }, [currentUser]);
 
   useEffect(() => {
@@ -169,7 +170,7 @@ function App() {
     async function fetchOrders() {
       try {
         const response = await fetch(
-          `http://localhost:5000/api/orders/${currentUser.id}`
+          `${API_BASE_URL}/orders/${currentUser.id}`
         );
 
         if (!response.ok) {
@@ -193,29 +194,22 @@ function App() {
   useEffect(() => {
     if (!currentUser || !isUserDataLoaded) return;
 
-    localStorage.setItem(
-      `shopsphere-cart-${currentUser.id}`,
-      JSON.stringify(cart)
-    );
+    fetch(`${API_BASE_URL}/user-data/${currentUser.id}/cart`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cart),
+    }).catch((error) => console.error("Unable to save cart:", error));
   }, [cart, currentUser, isUserDataLoaded]);
 
   useEffect(() => {
     if (!currentUser || !isUserDataLoaded) return;
 
-    localStorage.setItem(
-      `shopsphere-wishlist-${currentUser.id}`,
-      JSON.stringify(wishlist)
-    );
+    fetch(`${API_BASE_URL}/user-data/${currentUser.id}/wishlist`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(wishlist),
+    }).catch((error) => console.error("Unable to save wishlist:", error));
   }, [wishlist, currentUser, isUserDataLoaded]);
-
-  useEffect(() => {
-    if (!currentUser || !isUserDataLoaded) return;
-
-    localStorage.setItem(
-      `shopsphere-orders-${currentUser.id}`,
-      JSON.stringify(orders)
-    );
-  }, [orders, currentUser, isUserDataLoaded]);
 
   /* =========================
      SAVE NOTIFICATIONS
@@ -224,10 +218,11 @@ function App() {
   useEffect(() => {
     if (!currentUser || !isUserDataLoaded) return;
 
-    localStorage.setItem(
-      `shopsphere-notifications-${currentUser.id}`,
-      JSON.stringify(notifications)
-    );
+    fetch(`${API_BASE_URL}/user-data/${currentUser.id}/notifications`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(notifications),
+    }).catch((error) => console.error("Unable to save notifications:", error));
   }, [notifications, currentUser, isUserDataLoaded]);
 
   /* =========================
@@ -668,7 +663,7 @@ function App() {
           path="/account"
           element={
             <ProtectedRoute currentUser={currentUser}>
-              <Account />
+              <Account currentUser={currentUser} />
             </ProtectedRoute>
           }
         />
@@ -679,9 +674,9 @@ function App() {
           element={
             <ProtectedRoute currentUser={currentUser}>
               <Settings
+                currentUser={currentUser}
                 setCart={setCart}
                 setWishlist={setWishlist}
-                currentUser={currentUser}
                 setCurrentUser={setCurrentUser}
               />
             </ProtectedRoute>

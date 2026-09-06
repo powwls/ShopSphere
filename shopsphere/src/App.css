@@ -1699,8 +1699,9 @@
 }
 
 .auth-success {
-  background: #29381d;
-  color: var(--lime);
+  background: #e9f7df;
+  color: #245b16;
+  border: 1px solid #b8dd9a;
 }
 
 @media (max-width: 900px) {
@@ -3622,4 +3623,18 @@
   .search-container {
     width: 220px;
   }
+}
+
+.account-avatar {
+  background: #eef3f7;
+  color: var(--text);
+}
+
+.edit-profile-button {
+  background: var(--violet);
+  color: #ffffff;
+}
+
+.edit-profile-button svg {
+  color: #ffffff;
 }

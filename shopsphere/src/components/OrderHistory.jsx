@@ -28,14 +28,6 @@ function OrderHistory({ orders }) {
           </div>
 
 
-          <button
-            type="button"
-            className="close-orders-button"
-            onClick={() => navigate("/")}
-          >
-            Back to Shop
-          </button>
-
         </div>
 
 

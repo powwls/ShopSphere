@@ -10,7 +10,7 @@ import {
   Check,
 } from "lucide-react";
 
-function Settings() {
+function Settings({ currentUser }) {
   const [activeSection, setActiveSection] =
     useState(null);
 
@@ -55,36 +55,56 @@ function Settings() {
     }));
   }
 
-  function handleChangePassword(e) {
-    e.preventDefault();
+async function handleChangePassword(e) {
+  e.preventDefault();
 
-    if (
-      !passwords.currentPassword ||
-      !passwords.newPassword ||
-      !passwords.confirmPassword
-    ) {
-      setMessage("Please fill in all password fields.");
-      return;
-    }
+  if (
+    !passwords.currentPassword ||
+    !passwords.newPassword ||
+    !passwords.confirmPassword
+  ) {
+    setMessage("Please fill in all password fields.");
+    return;
+  }
 
-    if (
-      passwords.newPassword !==
-      passwords.confirmPassword
-    ) {
-      setMessage("New passwords do not match.");
-      return;
-    }
+  if (passwords.newPassword !== passwords.confirmPassword) {
+    setMessage("New passwords do not match.");
+    return;
+  }
 
-    setMessage(
-      "Password settings will be connected when Login and Signup are added."
+  try {
+    const response = await fetch(
+      "http://localhost:5000/api/auth/password",
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          currentPassword: passwords.currentPassword,
+          newPassword: passwords.newPassword,
+        }),
+      }
     );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message);
+    }
+
+    setMessage(data.message);
 
     setPasswords({
       currentPassword: "",
       newPassword: "",
       confirmPassword: "",
     });
+  } catch (error) {
+    setMessage(error.message || "Unable to change password.");
   }
+}
 
   /* CHANGE PASSWORD */
 
